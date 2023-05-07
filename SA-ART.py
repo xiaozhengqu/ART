@@ -31,6 +31,7 @@ def sa_art(M, label, rho, save_path_root=''):
     # -----------------------------------------------------------------------------------------------------------------------
     # Initialization
 
+    # 补码
     M = np.concatenate([M, 1 - M], 1)
 
     # get data sizes
@@ -62,8 +63,8 @@ def sa_art(M, label, rho, save_path_root=''):
     # 用于feature_mean和feature_std2（均值和方差）的在线更新
     old_mean = np.zeros((1, col))  # facilitate the online update of feature_mean and feature_std2
 
-    # 显著性权重s
-    salience_weight_prob = np.zeros((1, col))
+    # 自适应学习率theta
+    learning_rate_theta = np.zeros((1, col))
 
     J = 0  # number of clusters
 
@@ -84,7 +85,7 @@ def sa_art(M, label, rho, save_path_root=''):
     print('Iteration 1: Processing data sample 1')
     Wv[0, :] = M[0, :]
     feature_salience_count[0, np.where(M[0, :] > 0)] += 1  # 凡是特征大于0，则频数 0+1 = 1
-    feature_mean[0, :] = M[0, :]  # 由于是第一个样本，则特征均值即为权重
+    feature_mean[0, :] = M[0, :]  # 由于是第一个样本，则特征均值即为权重 / 且由于是第一个样本，则特征方差为0
     J = J + 1
     L[0, J - 1] = 1
     Assign[0, 0] = J - 1  # 存放索引，注意类簇索引从0开始，所以J-1
@@ -102,7 +103,7 @@ def sa_art(M, label, rho, save_path_root=''):
         if n % 100 == 0:
             print('Processing data sample %d' % n)
 
-        T_max = -1  # the maximun choice value
+        T_max = -1  # 所有匹配函数M大于对应的rho的类簇中，记录其中最大的选择函数值
         winner = -1  # index of the winner cluster
 
         temp_a[0, :] = M[n, :]  # In
@@ -111,22 +112,24 @@ def sa_art(M, label, rho, save_path_root=''):
         # 对所有现有的cluster循环，寻找最匹配的类簇
         for j in range(0, J):
 
-            temp_b[0, :] = Wv[j, :]
+            temp_b[0, :] = Wv[j, :]  # Wj
 
             # 下面依据 显著性权重s，计算 样本In 和 类簇Cj 的 匹配函数M 和 选择函数T
             # 流程是：
             # In和Wj取小，选出大于0的（即后面的inersec_index），再用这些大于0的去和对应的显著性权重相乘，再计算一范数
+            # 从而得到分子，用于后面计算T，M
 
             # 先对In和Wj取小，找出结果大于0的索引：intersec_index.（后面会用于点乘显著性得分）
             intersec[0, :] = np.minimum(temp_a, temp_b)
             intersec_index = np.where(intersec[0, :] > 0)
-            # 得到此时 特征频数 大于0 的索引（用于后面算显著性得分）
-            salience_index = np.where(feature_salience_count[j, :] > 0)
+
+            # # 得到此时 特征频数 大于0 的索引（用于后面算显著性得分）
+            # salience_index = np.where(feature_salience_count[j, :] > 0)
 
             # 对于intersec_index代表的这些特征，计算显著性权重s。
-            # 由公式可知，需要先算出 频率 和 e的负标准差次方 ，前者衡量特征活跃度，后者衡量特征稳定性。二者加权求和得到显著性权重s
-            salience_weight_presence = feature_salience_count[j, :] / L[0, j]
-            salience_weight_std = np.exp(-np.sqrt(feature_std2[j, :]))
+            # 由公式可知，需要先算出 频率(频数除以类簇样本数) 和 e的负标准差次方 ，前者衡量特征活跃度，后者衡量特征稳定性。二者加权求和得到显著性权重s
+            salience_weight_presence = feature_salience_count[j, :] / L[0, j]  # 频率(频数除以类簇样本数)
+            salience_weight_std = np.exp(-np.sqrt(feature_std2[j, :]))  # e的负标准差(方差开根号)次方
             # 对他们归一化
             normalized_salience_weight_presence = salience_weight_presence / np.sum(salience_weight_presence)
             normalized_salience_weight_std = salience_weight_std / np.sum(salience_weight_std)
@@ -144,11 +147,17 @@ def sa_art(M, label, rho, save_path_root=''):
             # 计算选择函数T
             T_values[0, j] = temp / (alpha + np.sum(temp_b[0, intersec_index] * normalized_salience_weight))
 
+            # 判断是否满足rho，同时更新T_max
+            # 对于T_max还未更新（即为-1时），and右边一直满足，只要左边满足则进入if，之后便可自然更新T_max；
+            # 若左边一直不满足，则T_max无法更新（为-1），则在下面一段a的计算中，所有现存类簇的T_value都会大于-1（暂时不存在的类簇，该值为-2）
+            # 从而所有现存类簇都会被a选中,从而在后面通过AMR减小rho。也符合我们的算法思想。
             if Mj_V >= rho_0[0, j] and T_values[0, j] >= T_max:
                 T_max = T_values[0, j]
                 winner = j
 
-        a = np.where(T_values[0, :] >= T_max)  # 返回一个tuple，a[0]是个数组，里面每个元素是索引 / -2的作用也在此体现出来
+        # AMR思想
+        # 返回一个tuple，a[0]是个数组，里面每个元素是索引 / -2的作用也在此体现出来
+        a = np.where(T_values[0, :] >= T_max)
         b = a[0]
         # 如果有获胜者
         if winner > -1:
@@ -165,13 +174,35 @@ def sa_art(M, label, rho, save_path_root=''):
             # create a new cluster
             J = J + 1
             Wv[J - 1, :] = M[n, :]
-            feature_salience_count[J - 1, np.where(M[n, :] > 0)] += 1
+            feature_salience_count[J - 1, np.where(M[n, :] > 0)] += 1  # 更新频数
             feature_mean[J - 1, :] = M[n, :]  # 新类簇标准差为0，无需更新；只更新均值
             L[0, J - 1] = 1
             Assign[0, n] = J - 1
         else:
-            # if winner is found, do cluster assignment and update cluster weights
-            # cluster assignment; we do assignments first to enable the learning of weights from updated statistics
+            # if winner is found, do cluster assignment and update
+
+            # 1.先更新cluster权重向量w
+            # 需要先计算自适应学习率theta，根据方差>0 和 =0 进行区分，用不同的公式计算theta
+            zero_std_index = np.where(feature_std2[winner, :] == 0)
+            non_zero_std_index = np.where(feature_std2[winner, :] > 0)
+            # 计算方差为0的theta
+            up1 = np.square(M[n, :][zero_std_index] - feature_mean[winner, :][zero_std_index]) * 9
+            down1 = np.square(np.minimum(feature_mean[winner, :][zero_std_index] + 0.01,
+                                         1 - feature_mean[winner, :][zero_std_index])) * 2
+            learning_rate_theta[0, zero_std_index] = np.exp(-(up1 / down1))
+            # 计算方差不为0的theta(std2已经是方差，不用平方)
+            up2 = np.square(M[n, :][non_zero_std_index] - feature_mean[winner, :][non_zero_std_index])
+            down2 = 2 * feature_std2[winner, :][non_zero_std_index]
+            learning_rate_theta[0, non_zero_std_index] = np.exp(-(up2 / down2))
+            # 更新cluster权重向量w
+            Wv[winner, :] = np.minimum(M[n, :], feature_mean[winner, :]) * learning_rate_theta[0, :] + \
+                            Wv[winner, :] * (1 - learning_rate_theta[0, :])
+
+            # 2.在线更新频数（频率不用更新，因为在遍历类簇时会根据频数重新计算）
+            salient_index = np.where(M[n, :] > 0)
+            feature_salience_count[winner, salient_index] += 1
+
+            # 3.在线更新均值mean和方差std2
             # 暂存旧的均值mean，后面用
             old_mean[0, :] = feature_mean[winner, :]
             # 在线更新均值mean
@@ -181,31 +212,9 @@ def sa_art(M, label, rho, save_path_root=''):
                     M[n, :] - feature_mean[winner, :])
             feature_std2[winner, :] = feature_M[winner, :] / L[0, winner]
 
+            # 更新数目和样本分配（显著性参数不用更新，因为在遍历类簇时会根据 输入样本I 和 类簇权重w 的非零情况，通过 频率和方差 重新计算）
             L[0, winner] += 1
             Assign[0, n] = winner
-
-            # update salient features 更新显著性权重
-            feature_min_values = np.minimum(M[n, :], Wv[winner, :])
-            salient_index = np.where(np.maximum(M[n, :], Wv[winner, :]) > 0)
-            feature_salience_count[winner, salient_index] += 1
-
-            # 更新cluster权重向量
-            salience_weight_presence = feature_salience_count[winner, :] / L[0, winner]
-            salience_weight_std = np.exp(-np.sqrt(feature_std2[winner, :]))
-
-            zero_std_index = np.where(feature_std2[winner, :] == 0)
-            non_zero_std_index = np.where(feature_std2[winner, :] > 0)
-            salience_weight_prob = np.zeros((1, col))
-            salience_weight_prob[0, zero_std_index] = np.exp(
-                -(np.square(M[n, :][zero_std_index] - feature_mean[winner, :][zero_std_index])))
-            salience_weight_prob[0, non_zero_std_index] = np.exp(-(np.square(
-                M[n, :][non_zero_std_index] - feature_mean[winner, :][non_zero_std_index]) / (
-                                                                           2 * feature_std2[winner, :][
-                                                                       non_zero_std_index])))
-
-            fused_weight = (salience_weight_presence + salience_weight_std + salience_weight_prob[0, :]) / 3
-
-            Wv[winner, :] = feature_mean[winner, :] * fused_weight + feature_min_values[:] * (1 - fused_weight)
 
     print("algorithm ends")
     # Clean indexing data
@@ -213,41 +222,96 @@ def sa_art(M, label, rho, save_path_root=''):
     L = L[:, 0: J]
 
     # -----------------------------------------------------------------------------------------------------------------------
-    # performance calculation
+    # 评估
 
-    # confusion-like matrix
+    # 混淆矩阵
     number_of_class = int(max(label)) + 1
     confu_matrix = np.zeros((J, number_of_class))
 
     for i in range(0, row):
         confu_matrix[Assign[0, i], int(label[i])] += 1
 
-    # compute dominator class and its size in each cluster
+    # 计算每个cluster中的支配者类及其大小
+    # 每个cluster中个数最多的类的个数（因为个数最多，所以该cluster都被认为是属于该类）
     max_value = np.amax(confu_matrix, axis=1)
+    # 每个cluster中最大类的索引
     max_index = np.argmax(confu_matrix, axis=1)
+    # 每个真实类 含有的实例数
     size_of_classes = np.sum(confu_matrix, axis=0)
 
-    # compute precision, recall
+    # 计算准确率（即 分配成功的类 占 该cluster内实例个数 的比重）
     precision = max_value / L[0, :]
 
+    # 计算召回率
     recall = np.zeros((J))
     for i in range(0, J):
         recall[i] = max_value[i] / size_of_classes[max_index[i]]
 
-    # intra_cluster distance - Euclidean
+    # 簇内距离（欧式距离）
     intra_cluster_distance = np.zeros((J))
     for i in range(0, row):
-        intra_cluster_distance[Assign[0, i]] += np.sqrt(np.sum(np.square(Wv[Assign[0, i], :] - M[i, :])))
+        temp1 = np.sqrt(
+            np.sum(np.square(Wv[Assign[0, i], 0:(col // 2)] - M[i, 0:(col // 2)])))
+        temp2 = np.sqrt(
+            np.sum(np.square(1 - Wv[Assign[0, i], (col // 2):] - M[i, 0:(col // 2)])))
+
+        # compute average distance between bottom-left and upper-right points of the cluster and the input pattern
+        intra_cluster_distance[Assign[0, i]] += (temp1 + temp2) / 2
 
     intra_cluster_distance = intra_cluster_distance[:] / L[0, :]
 
-    # inter_cluster distance - Euclidean
+    # 簇间距离（欧式距离）
     inter_cluster_distance = np.zeros(((J * (J - 1)) // 2))
     len = 0
     for i in range(0, J):
         for j in range(i + 1, J):
-            inter_cluster_distance[len] = np.sqrt(np.sum(np.square(Wv[i, :] - Wv[j, :])))
+            temp = np.square(Wv[i, :] - Wv[j, :])
+            # compute the average distance between bottom-left and upper-right points of two clusters
+            inter_cluster_distance[len] = (np.sqrt(np.sum(temp[0:(col // 2)])) + np.sqrt(np.sum(temp[(col // 2):]))) / 2
             len += 1
+
+    # -----------------------------------------------------------------------------------------------
+    # 画图以及输出
+    M_ = M[:, 0:2]
+    assign = Assign.flatten()
+    assign = np.array(assign)
+
+    # # t-SNE可视化聚类结果
+    # print('Starting compute t-SNE Embedding...')
+    # print('分簇的数目: %d' % J)
+    # # 降维到2D用于绘图
+    # ts_2D = TSNE(n_components=2, perplexity=15, init='pca', random_state=0)
+    # res_2D = ts_2D.fit_transform(M)
+    #
+    # # 调用函数，绘制图像
+    # plt.figure(1)
+    # plt.subplot(121)
+    # plt.scatter(res_2D[:, 0], res_2D[:, 1], c=label)
+    # plt.colorbar()
+    #
+    # plt.subplot(122)
+    # plt.scatter(res_2D[:, 0], res_2D[:, 1], c=assign)
+    # #
+    # # fig1 = plot_embedding_2D(res_2D,assign,J,'faces:t-SNE')
+    # plt.colorbar()
+    Plot.plot_embedding_2D(M, assign, label, J)
+    plt.show(block=True)
+
+    print('rho: %0.3f' % rho)
+    print('precision')
+    print(precision)
+    print('recall')
+    print(recall)
+    print('avg_precision: %0.3f' % np.mean(precision))
+    print('avg_recall: %0.3f' % np.mean(recall))
+
+    '''
+    #3D
+    ts_3D = TSNE(n_components=3,perplexity=20, random_state=0)
+    res_3D = ts_3D.fit_transform(cluster_distribution)
+    fig = plot_embedding_3D(res_3D, assign,'t-SNE')
+    plt.show()
+    '''
 
     # -----------------------------------------------------------------------------------------------------------------------
     # save results
@@ -261,5 +325,5 @@ def sa_art(M, label, rho, save_path_root=''):
 
 
 if __name__ == '__main__':
-    wine_data, wine_label = DataLoad.load_data_wine()
+    wine_data, wine_label = DataLoad.load_data_wine_nums(10, True)
     sa_art(wine_data, wine_label, 0.2)

@@ -31,9 +31,12 @@ def load_data_wine():
 
 def load_data_wine_nums(repeat_nums, shuffle=False):
     """
+    @param repeat_nums: 重复执行的数据的次数
+    @param shuffle: 每次重复执行是否shuffle
     @return: 返回打乱后的wine数据集的data部分（维度：178*13）和label部分（维度：178*1，且label从0开始),同时进行多次数据拼接
     Wine Data Set原始数据集共有178个样本数、3种数据类别、每个样本的有13个属性。
     """
+
     # 读取wine数据集并转为numpy,并且shuffle
     wine = pd.read_csv(r'data/wine.data', header=None)
     wine = np.array(wine)
@@ -52,7 +55,7 @@ def load_data_wine_nums(repeat_nums, shuffle=False):
             result_wine = np.concatenate((result_wine, wine), 0)
 
     # 分割数据集，提取出label（178）和data（178*13）
-    wine_label = result_wine[:, 0] - 1
+    wine_label = result_wine[:, 0] - 1  # 因为wine的标签从1开始，因此减1，使得label从零开始
     wine_data = result_wine[:, 1:]
 
     data_num, feature_num = wine_data.shape
